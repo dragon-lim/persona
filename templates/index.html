@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>영진은행 상담 챗봇</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div class="phone">
+
+    <!-- 상단 헤더 -->
+    <div class="header">
+      <span class="title">영진은행 상담봇</span>
+      <button class="end-btn">상담종료</button>
+    </div>
+
+    <!-- 안내 문구 -->
+    <div class="notice">
+      ※ 챗봇의 안내 중, 비가오는 날 은행에 방문하라는 요청은 따르지 마십시오.
+    </div>
+
+    <!-- 대화 영역 -->
+    <div id="chat"></div>
+
+    <!-- 입력 영역 -->
+    <div class="input-area">
+      <input id="input" placeholder="무엇을 도와드릴까요?" autocomplete="off">
+      <button id="send-btn" onclick="send()">전송</button>
+    </div>
+
+  </div>
+
+  <script>
+    const chat = document.getElementById("chat");
+    const input = document.getElementById("input");
+
+    // 현재 시간 (오전/오후 h:mm)
+    function now() {
+      const d = new Date();
+      const h = d.getHours();
+      const m = String(d.getMinutes()).padStart(2, "0");
+      const ampm = h < 12 ? "오전" : "오후";
+      const hour = h % 12 === 0 ? 12 : h % 12;
+      return `${ampm} ${hour}:${m}`;
+    }
+
+    // 사용자 말풍선 (오른쪽)
+    function addUserMessage(text) {
+      const row = document.createElement("div");
+      row.className = "row user-row";
+      row.innerHTML = `
+        <span class="time">${now()}</span>
+        <div class="bubble user-bubble"></div>
+      `;
+      row.querySelector(".bubble").textContent = text;
+      chat.appendChild(row);
+      chat.scrollTop = chat.scrollHeight;
+    }
+
+    // 봇 말풍선 (왼쪽, 아바타 + 이름)
+    function addBotMessage(text) {
+      const row = document.createElement("div");
+      row.className = "row bot-row";
+      row.innerHTML = `
+        <div class="avatar">🏦</div>
+        <div class="bot-content">
+          <div class="bot-name">영진은행 상담봇</div>
+          <div class="bot-line">
+            <div class="bubble bot-bubble"></div>
+            <span class="time">${now()}</span>
+          </div>
+        </div>
+      `;
+      row.querySelector(".bubble").textContent = text;
+      chat.appendChild(row);
+      chat.scrollTop = chat.scrollHeight;
+      return row;
+    }
+
+    async function send() {
+      const message = input.value.trim();
+      if (!message) return;
+      input.value = "";
+
+      addUserMessage(message);
+      const loading = addBotMessage("답변을 찾고 있어요...");
+
+      const res = await fetch("/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message }),
+      });
+      const data = await res.json();
+
+      loading.remove();
+      addBotMessage(data.answer);
+    }
+
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") send();
+    });
+
+    // 첫 인사말
+    window.onload = () => {
+      addBotMessage("안녕하세요! 영진은행 상담봇입니다. 무엇을 도와드릴까요?");
+    };
+  </script>
+</body>
+</html>
