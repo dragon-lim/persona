@@ -1,0 +1,231 @@
+# 바삭하게 알아야 할 구조들
+
+---
+
+## ① Flask 앱 생성 + 라우트 패턴
+
+```python
+app = Flask(__name__)
+
+@app.route("/")
+def index():
+    return render_template("index.html", personas=PERSONAS)
+
+@app.route("/chat", methods=["POST"])
+def chat():
+    ...
+
+if __name__ == "__main__":
+    app.run(debug=True, port=5000)
+```
+
+**왜 바삭하게 알아야 하나?**
+모든 Flask 프로젝트의 공통 뼈대입니다.
+`@app.route`가 없으면 브라우저 요청을 받을 수 없고,
+`if __name__ == "__main__":`이 없으면 서버가 실행되지 않습니다.
+이 패턴은 어떤 Flask 프로젝트를 만들든 반드시 등장합니다.
+
+**핵심 암기 포인트**
+- `app = Flask(__name__)` — 앱 생성
+- `@app.route("주소", methods=["POST"])` — 어떤 주소로 오는 어떤 방식의 요청을 처리할지
+- `methods` 생략 시 GET만 허용
+- `app.run(debug=True, port=5000)` — 서버 시작
+- `if __name__ == "__main__":` — 직접 실행할 때만 서버 시작
+
+---
+
+## ② request.json + data.get()
+
+```python
+data = request.json
+persona_id = data["persona"]
+user_message = data["message"]
+session_id = data.get("session_id", "default")
+```
+
+**왜 바삭하게 알아야 하나?**
+브라우저가 보낸 데이터를 읽는 유일한 방법입니다.
+`data["키"]`와 `data.get("키", 기본값)`의 차이를 모르면
+키가 없을 때 에러가 나도 이유를 모릅니다.
+
+**핵심 암기 포인트**
+- `request.json` — 브라우저가 보낸 JSON을 딕셔너리로 자동 변환
+- `data["키"]` — 키가 반드시 있을 때 사용. 없으면 KeyError 발생
+- `data.get("키", 기본값)` — 키가 없어도 에러 없이 기본값 반환. 선택적 파라미터에 사용
+
+---
+
+## ③ 딕셔너리 안에 딕셔너리 (PERSONAS 구조)
+
+```python
+PERSONAS = {
+    "teacher": {
+        "name": "친절한 선생님",
+        "description": "프로그래밍 입문자를 위한 선생님",
+        "system": "당신은 ...",
+    },
+    "chef": {
+        "name": "요리사 셰프",
+        ...
+    },
+}
+```
+
+**왜 바삭하게 알아야 하나?**
+페르소나를 추가하거나 수정할 때 이 구조를 직접 짜야 합니다.
+또한 실무에서 설정값, 메뉴 목록, 캐릭터 정보 등 거의 모든 데이터를 이 구조로 관리합니다.
+
+**핵심 암기 포인트**
+- 딕셔너리는 `{키: 값}` 쌍의 묶음
+- 값이 또 딕셔너리일 수 있음 (중첩)
+- 꺼낼 때: `PERSONAS["teacher"]["system"]` 처럼 키를 연속으로 사용
+- 페르소나 추가 시 같은 구조로 하나 더 추가하면 됨
+
+---
+
+## ④ 대화 히스토리 관리 구조
+
+```python
+conversations: dict[str, list] = {}
+
+conv_key = f"{session_id}_{persona_id}"
+
+if conv_key not in conversations:
+    conversations[conv_key] = []
+
+history = conversations[conv_key]
+history.append({"role": "user", "content": user_message})
+
+# Claude 응답 후
+history.append({"role": "assistant", "content": full_response})
+```
+
+**왜 바삭하게 알아야 하나?**
+Claude API는 대화 기록을 직접 관리해야 합니다.
+이 구조 없이는 Claude가 이전 대화를 기억하지 못합니다.
+또한 여러 사용자, 여러 페르소나를 동시에 처리하려면
+키 설계(`세션ID_페르소나ID`)를 이해해야 합니다.
+
+**핵심 암기 포인트**
+- `conversations = {}` — 서버 메모리에 대화를 저장하는 딕셔너리
+- `conv_key = f"{session_id}_{persona_id}"` — 사용자 × 페르소나 조합으로 키 생성
+- `if conv_key not in conversations:` — 처음 대화 시작 시 빈 리스트 초기화
+- `history.append({"role": "user", "content": ...})` — 사용자 메시지 추가
+- `history.append({"role": "assistant", "content": ...})` — AI 응답 추가
+- `history`와 `conversations[conv_key]`는 같은 리스트. history 수정 시 conversations도 자동으로 바뀜
+- Claude API의 messages는 반드시 `{"role": ..., "content": ...}` 형태의 딕셔너리 리스트여야 함
+
+---
+
+## ⑤ Claude API 스트리밍 호출
+
+```python
+with client.messages.stream(
+    model=MODEL,
+    max_tokens=1024,
+    system=persona["system"],
+    messages=history,
+) as stream:
+    full_response = ""
+    for text in stream.text_stream:
+        full_response += text
+        yield f"data: {json.dumps({'text': text})}\n\n"
+
+    history.append({"role": "assistant", "content": full_response})
+
+    usage = stream.get_final_message().usage
+    yield f"data: {json.dumps({'done': True, 'input_tokens': usage.input_tokens, 'output_tokens': usage.output_tokens})}\n\n"
+```
+
+**왜 바삭하게 알아야 하나?**
+이 코드가 Claude를 실제로 호출하는 핵심입니다.
+`system`에 페르소나를 넣고, `messages`에 히스토리를 넣는 패턴은
+어떤 Claude 기반 앱을 만들든 똑같이 씁니다.
+스트리밍과 일반 호출의 차이도 여기서 결정됩니다.
+
+**핵심 암기 포인트**
+- `with client.messages.stream(...) as stream:` — 스트리밍 연결 (with 블록 끝나면 자동 정리)
+- `system=persona["system"]` — 이 한 줄이 페르소나를 실제로 적용하는 부분
+- `messages=history` — 대화 기록 전체를 넘겨야 컨텍스트 유지됨
+- `for text in stream.text_stream:` — 토큰 하나씩 꺼내서 처리
+- `full_response += text` — 토큰 조각들을 이어붙여 완성본 저장
+- 스트리밍 끝난 뒤 반드시 `history.append(assistant 응답)` 해야 다음 대화에서 기억함
+- `stream.get_final_message().usage` — 토큰 사용량 확인
+
+---
+
+## ⑥ yield + SSE 형식
+
+```python
+def generate():
+    for text in stream.text_stream:
+        yield f"data: {json.dumps({'text': text})}\n\n"
+
+    yield f"data: {json.dumps({'done': True, ...})}\n\n"
+
+return Response(
+    stream_with_context(generate()),
+    content_type="text/event-stream",
+)
+```
+
+**왜 바삭하게 알아야 하나?**
+스트리밍 응답을 구현하는 유일한 방법이 yield + SSE 조합입니다.
+`return`으로는 절대 스트리밍을 구현할 수 없습니다.
+브라우저에서 타이핑되는 효과는 이 구조에서 나옵니다.
+
+**핵심 암기 포인트**
+- `yield` — return과 달리 함수를 멈췄다가 이어서 실행. 이게 있으면 제너레이터 함수가 됨
+- SSE 형식은 반드시 `"data: 내용\n\n"` (data: 로 시작, \n\n 으로 끝)
+- `json.dumps(딕셔너리)` — 딕셔너리를 JSON 문자열로 변환
+- 마지막에 `{"done": True}` 이벤트를 보내서 브라우저에게 스트리밍 종료를 알림
+- `Response(stream_with_context(generate()), content_type="text/event-stream")` — 이 세 가지가 한 세트
+
+---
+
+## ⑦ conversations.pop() — 히스토리 초기화
+
+```python
+conversations.pop(conv_key, None)
+```
+
+**왜 바삭하게 알아야 하나?**
+대화 리셋 기능은 거의 모든 챗봇에 필요합니다.
+`del conversations[conv_key]`로도 삭제할 수 있지만 키가 없으면 에러가 납니다.
+`pop(키, None)`은 없어도 에러 없이 넘어가는 안전한 방법입니다.
+
+**핵심 암기 포인트**
+- `딕셔너리.pop(키, 기본값)` — 키 삭제. 없으면 기본값 반환 (에러 없음)
+- `del 딕셔너리[키]` — 키 삭제. 없으면 KeyError 발생
+- 리셋 시 `conversations`에서 해당 키만 지우면 다음 요청 때 빈 리스트로 새로 시작됨
+
+---
+
+## 참고만 해도 되는 것들
+
+| 항목 | 이유 |
+|---|---|
+| `: dict[str, list]` 타입 힌트 | 동작과 무관한 메모. 있어도 없어도 됨 |
+| 괄호로 문자열 여러 줄 나누기 | 가독성용 스타일. 한 줄로 써도 동작 동일 |
+| `stream_with_context()` | Flask 내부 처리용. 없으면 에러 날 수 있지만 "왜"를 깊이 알 필요 없음 |
+| 주석 (# ...) | 설명용. 코드 동작과 무관 |
+
+---
+
+## 한눈에 보는 우선순위
+
+```
+바삭하게 (백지에서 타이핑 가능해야 함)
+  ① Flask 앱 생성 + 라우트 패턴
+  ② request.json + data.get()
+  ③ 딕셔너리 안에 딕셔너리 (PERSONAS)
+  ④ 대화 히스토리 관리 (conversations + append)
+  ⑤ Claude API 스트리밍 호출
+  ⑥ yield + SSE 형식
+  ⑦ conversations.pop() 초기화
+
+참고만 해도 됨
+  - 타입 힌트
+  - 문자열 줄 나누기 스타일
+  - stream_with_context 내부 원리
+```
